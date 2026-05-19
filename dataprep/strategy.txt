@@ -1,0 +1,172 @@
+ PPT POINTERS WITH EXPLANATIONS
+1. DATA EXTRACTION & SCOPE
+What: Extract complaint data from Operations Dashboard (Fabric)
+Period: July 1, 2023 → January 2, 2026 (30 months)
+Source: DAX query on FACT_MATTER and DIM_ISSUE tables
+Output: operations_dashboard_extract.csv - Full complaint dataset with tier_2 keywords
+Why: Establish baseline dataset for keyword classification model training
+________________________________________
+2. PHASE 1: KEYWORD NORMALIZATION (Data Quality)
+2.1 Problem Identified
+•	Raw tags found: Variable formats, typos, duplicates, inconsistent naming
+•	Example issues:
+o	'Resolution agreed but not me' (typo for "met")
+o	'Information inaccurat' (truncated)
+o	'Damage by 3rd party' vs 'By 3rd party' (variant forms)
+o	Multiple representations of same concept
+2.2 Solution: TAG_CORRECTIONS Dictionary
+•	Typo fixes: 2 corrections (e.g., "not me" → "not met")
+•	Standardization: 7 mappings (variants → canonical form)
+•	Damage tag handling: 3 corrections (prefix removal for consistency)
+•	Result: Reduced duplicate tags, standardized naming conventions
+2.3 Canonical Mapping
+•	Source of truth: canonical_tag_map_enriched.csv (92 keywords total)
+•	Mapping process:
+1.	Normalize text (lowercase, remove punctuation)
+2.	Direct match attempt
+3.	Fuzzy matching (substring)
+4.	Flag unmapped tags for review
+•	Output: unmapped_tags_review.csv - Manual review queue
+•	Deliverable: keyword_inventory.csv - Coverage statistics per keyword
+2.4 Coverage Classification
+•	Abundant keywords (>500 cases): 56 keywords
+Well-represented, need sampling to avoid dominance
+•	Normal keywords (50-500 cases): 23 keywords
+Adequate coverage, target 200 samples
+•	Rare keywords (<50 cases): 13 keywords
+Critical issue - insufficient training data
+Rare Keywords Breakdown:
+•	1-5 cases: 7 keywords (e.g., "OOJ services", "Defective notice")
+•	15-19 cases: 3 keywords
+•	43-46 cases: 3 keywords (borderline)
+________________________________________
+3. PHASE 2: STRATIFIED SHORTLISTING (Balanced Sampling)
+3.1 Objective
+Create balanced training dataset addressing class imbalance while excluding contamination
+3.2 Example Case Exclusion
+•	Source: tag_desc_eg_built.csv (examples used in keyword descriptions)
+•	Cases excluded: All cases from source_case_reference column
+•	Why: Prevent data leakage (examples shouldn't appear in training data)
+•	Result: Clean available pool for sampling
+3.3 Sampling Strategy
+Keyword Category	Strategy	Target per Keyword	Rationale
+Rare (<50)	Take ALL available	Minimum 4 cases	Critical to have ANY training examples
+Normal (50-500)	Random sampling	200 cases	Balanced representation
+Abundant (>500)	Random sampling (capped)	200 cases	Prevent dominance in training
+Random state: 42 (reproducibility)
+3.4 Priority-Based Execution
+1.	Priority 1: Ensure rare keywords get minimum coverage
+2.	Priority 2: Shortlist normal keywords to target
+3.	Priority 3: Cap abundant keywords to prevent over-representation
+Output: Selected case IDs → create shortlisted dataset
+________________________________________
+4. PHASE 3: SEMANTIC NOISE CLEANING (Quality Assurance)
+4.1 Problem Statement
+Not all keyword assignments are semantically valid - some cases may be:
+•	Mislabeled (keyword doesn't match complaint content)
+•	Borderline (weak semantic connection)
+•	Noise (incorrect tagging)
+4.2 Semantic Validation Model
+•	Model: all-MiniLM-L6-v2 (Sentence Transformer)
+•	Size: ~80MB, efficient for production
+•	Technique: Cosine similarity between complaint and keyword representations
+4.3 Validation Approach
+Encode Keywords (2 representations per keyword):
+1.	Description embedding: "Keyword: description text" from canonical_tag_map.csv
+2.	Example embedding: Real complaint example from tag_desc_eg_built.csv
+Compute Similarity:
+•	desc_sim = similarity(complaint, keyword_description)
+•	example_sim = similarity(complaint, keyword_example)
+•	combined_sim = (0.4 × desc_sim) + (0.6 × example_sim)
+Weight examples higher - more specific than descriptions
+4.4 Decision Thresholds
+•	DESC_THRESHOLD: 0.40 (minimum similarity to description)
+•	EXAMPLE_THRESHOLD: 0.38 (minimum similarity to examples)
+•	COMBINED_THRESHOLD: 0.42 (weighted combined score)
+Classification Logic:
+•	combined_sim ≥ 0.52 → KEEP (strong match)
+•	0.42 ≤ combined_sim < 0.52 → REVIEW (borderline, needs manual check)
+•	combined_sim < 0.42 → REMOVE (low semantic similarity, likely noise)
+4.5 Validation Results
+Processed: 110,096 complaints × 92 keywords = keyword-case pairs evaluated
+Verdict Distribution:
+•	KEEP: Correct keyword assignments (verified clean labels)
+•	REVIEW: Borderline cases requiring manual inspection
+•	REMOVE: Noisy/incorrect labels flagged for removal
+Outputs:
+•	complaints_after_validation.csv - Cleaned complaints with verdicts
+•	keyword_audit_log.csv - Full audit trail (case, keyword, scores, verdict)
+•	review_queue.csv - Borderline cases sorted by similarity for manual review
+________________________________________
+5. FILE INVENTORY
+File Name	Purpose	Content
+operations_dashboard_extract.csv	Raw extraction	Full complaints from Fabric
+canonical_tag_map_enriched.csv	Source of truth	92 canonical keywords + descriptions
+tag_desc_eg_built.csv	Example repository	Example complaints per keyword
+keyword_inventory.csv	Coverage report	Case count per keyword (rare/normal/abundant)
+unmapped_tags_review.csv	Quality check	Tags that couldn't be automatically mapped
+sampled_100_complaints_by_tier2.csv	Test set	Representative sample (1 per tier_2 + random)
+complaints_after_validation.csv	Cleaned data	Validated complaints with quality verdicts
+keyword_audit_log.csv	Audit trail	Similarity scores + decisions per case-keyword pair
+review_queue.csv	Manual review	Borderline cases (similarity 0.42-0.52)
+________________________________________
+📄 CONCISE PROCESS DOCUMENTATION
+Complaint Keyword Classification: Data Preparation Pipeline
+Objective: Build clean, balanced training dataset for multi-label complaint classification (92 keywords)
+________________________________________
+Process Flow
+PHASE 1: NORMALIZATION → PHASE 2: SAMPLING → PHASE 3: VALIDATION
+________________________________________
+PHASE 1: Keyword Normalization
+Input: Raw complaints with tier_2 tags (various formats)
+Process:
+1.	Parse tier_2 from string/list formats → clean lists
+2.	Apply TAG_CORRECTIONS (12 mappings: typos + variants)
+3.	Map to canonical form using canonical_tag_map_enriched.csv (92 keywords)
+4.	Normalize text for fuzzy matching (lowercase, no punctuation)
+5.	Flag unmapped tags for manual review
+Output: Canonical keyword lists + coverage inventory
+Key Metrics: 56 abundant, 23 normal, 13 rare keywords
+________________________________________
+PHASE 2: Stratified Shortlisting
+Input: Normalized complaints
+Process:
+1.	Exclude example cases from tag_desc_eg_built.csv (prevent leakage)
+2.	Priority 1: Sample ALL rare keyword cases (min 4 per keyword)
+3.	Priority 2: Sample 200 cases per normal keyword (random_state=42)
+4.	Priority 3: Cap abundant keywords at 200 cases (prevent dominance)
+5.	Combine selected case IDs → shortlisted dataset
+Output: Balanced training pool with addressed class imbalance
+Coverage: All keywords represented, rare keywords maximized
+________________________________________
+PHASE 3: Semantic Validation
+Input: Shortlisted complaints (110,096 processed)
+Process:
+1.	Load Sentence Transformer model (all-MiniLM-L6-v2)
+2.	Pre-encode 92 keywords (description + example embeddings)
+3.	For each complaint-keyword pair:
+o	Compute cosine similarity to description
+o	Compute cosine similarity to example
+o	Calculate weighted combined score (40% desc + 60% example)
+4.	Classify: KEEP (≥0.52), REVIEW (0.42-0.52), REMOVE (<0.42)
+5.	Generate audit trail with similarity scores
+Output:
+•	Cleaned dataset with verified labels
+•	Review queue for borderline cases
+•	Full audit log for transparency
+Quality Assurance: Multi-threshold semantic validation catches mislabeled data
+________________________________________
+Key Design Decisions
+1.	Canonical mapping over raw tags - Single source of truth prevents duplicates
+2.	Example exclusion - Prevents circular reference and overfitting
+3.	Stratified sampling - Addresses severe class imbalance (1 to 500+ cases)
+4.	Semantic validation - ML-based quality check beyond rule-based cleaning
+5.	Weighted similarity - Examples weighted 60% (more specific than descriptions)
+6.	Three-tier verdicts - Balances automation (KEEP/REMOVE) with human review (REVIEW)
+________________________________________
+Deliverables for Model Training
+✅ complaints_after_validation.csv - Clean multi-label training data
+✅ keyword_audit_log.csv - Quality metrics per label
+✅ review_queue.csv - Cases requiring manual inspection
+✅ Coverage balanced across 92 keywords (rare keywords protected)
+
